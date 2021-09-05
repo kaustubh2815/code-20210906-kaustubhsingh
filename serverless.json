@@ -1,0 +1,343 @@
+{
+    "AWSTemplateFormatVersion": "2021-09-06",
+    
+    "Description": "Deploy Lambda Function Cloud Formation Template: This template creates an IAM role that is allowed to create log groups and streams, and put events into log streams. It gives full access to the S3 bucket where the data is stored. The template also creates an SNS topic that can send messages to an SQS queue wth appropriate permissions for one IAM user to publish to the topic and another to read messages from the queue. My1stSNSTopic is set up to publish to subscribed endpoint My1stSQSQueue. My1stPublishUser is an IAM user that can publish to My1stSNSTopic using the Publish API. My1stTopicPolicy assigns that permission to My1stPublishUser. My1stSQSQueueUser is an IAM user that can read messages from the SQS queue. My1stSQSQueuePolicy assigns those permissions to My1stSQSQueueUser. It also assigns permission for My1stSNSTopic to publish its notifications to the queue. The template creates access keys for the two IAM users with My1stPublishUserKey and My1stSQSQueueUserKey.",
+
+    "Parameters": {
+        "My1stPublishUserPassword": {
+          "NoEcho": "true",
+          "Type": "String",
+          "Description": "Password for the IAM user My1stPublishUser",
+          "MinLength": "1",
+          "MaxLength": "41",
+          "AllowedPattern": "[a-zA-Z0-9]*",
+          "ConstraintDescription": "must contain only alphanumeric characters."
+        },
+        "My1stSQSQueueUserPassword": {
+          "NoEcho": "true",
+          "Type": "String",
+          "Description": "Password for the IAM user My1stSQSQueueUser",
+          "MinLength": "1",
+          "MaxLength": "41",
+          "AllowedPattern": "[a-zA-Z0-9]*",
+          "ConstraintDescription": "must contain only alphanumeric characters."
+        }
+    },
+
+    "Resources": {
+
+        "My1stRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": "My1stRole",
+                "AssumeRolePolicyDocument": {
+                    "Version": "2021-09-06",
+                    "Statement": [{
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [ "lambda.amazonaws.com" ]
+                        },
+                        "Action": [ "sts:AssumeRole" ]
+                    }]
+                },
+                "Path": "/",
+                "Policies": [{
+                    "PolicyName": "AWSLambdaBasicExecutionRole",
+                    "PolicyDocument": {
+                        "Version": "2021-09-06",
+                        "Statement": [{
+                            "Effect": "Allow",
+                            "Action": [
+                                "logs:CreateLogGroup",
+                                "logs:CreateLogStream",
+                                "logs:PutLogEvents"
+                            ],
+                            "Resource": "*"
+                        }]
+                    }
+                },
+                {
+                    "PolicyName": "AmazonS3FullAccess",
+                    "PolicyDocument": {
+                        "Version": "2021-09-06",
+                        "Statement": [{
+                            "Effect": "Allow",
+                            "Action": "s3:*",
+                            "Resource": [
+                                "arn:aws:s3:::exchange-data-raw",
+                                "arn:aws:s3:::exchange-data-raw/*"
+                            ]
+                        }]
+                    }
+                }]
+            }
+        },
+        
+        "My1stLambdaFunc": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "My1stLambdaFunc",
+                "Handler": "index.handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "My1stLambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Code": {
+                    "S3Bucket": "My1stS3Bucket",
+                    "S3Key": "testKey"
+                },
+                "Runtime": "python3.9",
+                "Timeout": 25,
+                "TracingConfig": {
+                    "Mode": "Active"
+                }
+            }
+        },
+
+        "My1stSNSTopic": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "Subscription": [{
+                    "Endpoint": {
+                        "Fn::GetAtt": ["My1stSQSQueue", "Arn"]
+                    },
+                    "Protocol": "sqs"
+                }]
+            }
+        },
+
+        "My1stSQSQueue": {
+            "Type": "AWS::SQS::Queue"
+        },
+
+        "My1stPublishUser": {
+            "Type": "AWS::IAM::User",
+            "Properties": {
+                "LoginProfile": {
+                    "Password": {
+                        "Ref": "My1stPublishUserPassword"
+                    }
+                }
+            }
+        },
+
+        "My1stPublishUserKey": {
+            "Type": "AWS::IAM::AccessKey",
+            "Properties": {
+                "UserName": {
+                    "Ref": "My1stPublishUser"
+                }
+            }
+        },
+
+        "My1stPublishTopicGroup": {
+            "Type": "AWS::IAM::Group",
+            "Properties": {
+                "Policies": [{
+                    "PolicyName": "MyTopicGroupPolicy",
+                    "PolicyDocument": {
+                        "Statement": [{
+                            "Effect": "Allow",
+                            "Action": [
+                                "sns:Publish"
+                            ],
+                            "Resource": {
+                                "Ref": "My1stSNSTopic"
+                            }
+                        }]
+                    }
+                }]
+            }
+        },
+
+        "AddUserToMyPublishTopicGroup": {
+            "Type": "AWS::IAM::UserToGroupAddition",
+            "Properties": {
+                "GroupName": {
+                    "Ref": "My1stPublishTopicGroup"
+                },
+                "Users": [{
+                    "Ref": "My1stPublishUser"
+                }]
+            }
+        },
+
+        "My1stSQSQueueUser": {
+            "Type": "AWS::IAM::User",
+            "Properties": {
+                "LoginProfile": {
+                    "Password": {
+                        "Ref": "My1stSQSQueueUserPassword"
+                    }
+                }
+            }
+        },
+
+        "My1stSQSQueueUserKey": {
+            "Type": "AWS::IAM::AccessKey",
+            "Properties": {
+                "UserName": {
+                    "Ref": "My1stSQSQueueUser"
+                }
+            }
+        },
+
+        "MyRDMessageQueueGroup": {
+            "Type": "AWS::IAM::Group",
+            "Properties": {
+                "Policies": [{
+                    "PolicyName": "MyQueueGroupPolicy",
+                    "PolicyDocument": {
+                        "Statement": [{
+                            "Effect": "Allow",
+                            "Action": [
+                                "sqs:DeleteMessage",
+                                "sqs:ReceiveMessage"
+                            ],
+                            "Resource": [{
+                                "Fn::GetAtt": ["My1stSQSQueue", "Arn"]
+                            }]
+                        }]
+                    }
+                }]
+            }
+        },
+
+        "AddUserToMyQueueGroup": {
+            "Type": "AWS::IAM::UserToGroupAddition",
+            "Properties": {
+                "GroupName": {
+                    "Ref": "MyRDMessageQueueGroup"
+                },
+                "Users": [{
+                    "Ref": "My1stSQSQueueUser"
+                }]
+            }
+        },
+
+        "MyQueuePolicy": {
+            "Type": "AWS::SQS::QueuePolicy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Statement": [{
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": "sns.amazonaws.com"
+                        },
+                        "Action": ["sqs:SendMessage"],
+                        "Resource": "*",
+                        "Condition": {
+                            "ArnEquals": {
+                                "aws:SourceArn": {
+                                    "Ref": "My1stSNSTopic"
+                                }
+                            }
+                        }
+                    }]
+                },
+                "Queues": [{
+                    "Ref": "My1stSQSQueue"
+                }]
+            }
+        },
+
+        "My1stS3Bucket": {
+            "Type": "AWS::S3::Bucket",
+            "DeletionPolicy": "Retain",
+            "Properties": {
+                "BucketName": "My1stS3Bucket",
+                "VersioningConfiguration": {
+                    "Status": "Enabled"
+                },
+                "LifecycleConfiguration": {
+                    "Rules": [
+                        {
+                            "Id": "GlacierRule",
+                            "Prefix": "glacier",
+                            "Status": "Enabled",
+                            "ExpirationInDays": 365,
+                            "Transitions": [
+                                {
+                                    "TransitionInDays": 1,
+                                    "StorageClass": "GLACIER"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    },
+
+    "Outputs": {
+        "MySNSTopicARN": {
+            "Value": {
+                "Ref": "My1stSNSTopic"
+            }
+        },
+
+        "MyQueueInfo": {
+            "Value": {
+                "Fn::Join": [
+                    " ",
+                    [
+                        "ARN:",
+                        {
+                            "Fn::GetAtt": ["My1stSQSQueue", "Arn"]
+                        },
+                        "URL:",
+                        {
+                            "Ref": "My1stSQSQueue"
+                        }
+                    ]
+                ]
+            }
+        },
+
+        "MyPublishUserInfo": {
+            "Value": {
+                "Fn::Join": [
+                    " ",
+                    [
+                        "ARN:",
+                        {
+                            "Fn::GetAtt": ["My1stPublishUser", "Arn"]
+                        },
+                        "Access Key:",
+                        {
+                            "Ref": "My1stPublishUserKey"
+                        },
+                        "Secret Key:",
+                        {
+                            "Fn::GetAtt": ["My1stPublishUserKey", "SecretAccessKey"]
+                        }
+                    ]
+                ]
+            }
+        },
+
+        "MyQueueUserInfo": {
+            "Value": {
+                "Fn::Join": [
+                    " ",
+                    [
+                        "ARN:",
+                        {
+                            "Fn::GetAtt": ["My1stSQSQueueUser", "Arn"]
+                        },
+                        "Access Key:",
+                        {
+                            "Ref": "My1stSQSQueueUserKey"
+                        },
+                        "Secret Key:",
+                        {
+                            "Fn::GetAtt": ["My1stSQSQueueUserKey", "SecretAccessKey"]
+                        }
+                    ]
+                ]
+            }
+        }
+    }
+}
